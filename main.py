@@ -40,6 +40,7 @@ THEMES = {
 class BatteryOSCApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.initialized = False  # Guard flag to prevent startup callback crashes
 
         self.title("VRChat Battery OSC Bridge - Steam Frame Edition")
         self.geometry("980x820")
@@ -47,7 +48,7 @@ class BatteryOSCApp(ctk.CTk):
 
         self.is_running = False
         self.osc_client = None
-        self.poll_interval = 3.0  # Default polling frequency in seconds (min 1.0)
+        self.poll_interval = 3.0  # Default polling frequency (min 1.0s)
         self.current_theme_name = "Midnight Navy"
         self.palette = THEMES[self.current_theme_name]
         
@@ -83,11 +84,7 @@ class BatteryOSCApp(ctk.CTk):
         self.views_container.grid_columnconfigure(0, weight=1)
         self.views_container.grid_rowconfigure(0, weight=1)
 
-        # Build Views
-        self.setup_home_view()
-        self.setup_settings_view()
-
-        # --- 3. Persistent Debug Log (Pinned at Bottom) ---
+        # --- 3. Persistent Debug Log (Created FIRST so it exists for startup events) ---
         self.card_log = ctk.CTkFrame(self.right_container, fg_color=self.palette["card"], border_color=self.palette["border"], border_width=1, corner_radius=10)
         self.card_log.grid(row=1, column=0, sticky="ew", padx=30, pady=(0, 20))
         self.card_log.grid_columnconfigure(0, weight=1)
@@ -99,8 +96,15 @@ class BatteryOSCApp(ctk.CTk):
         self.log_textbox.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
         self.log_textbox.configure(state="disabled")
 
+        # Build Views
+        self.setup_home_view()
+        self.setup_settings_view()
+
         # Show Home by default
         self.show_home_view()
+
+        # Mark initialization complete
+        self.initialized = True
 
         # Start background polling thread & UI animation loop
         self.poll_thread = threading.Thread(target=self.poll_battery_loop, daemon=True)
@@ -155,7 +159,7 @@ class BatteryOSCApp(ctk.CTk):
         self.port_entry.insert(0, "9000")
         self.port_entry.grid(row=2, column=1, sticky="e", padx=25, pady=(5, 15))
 
-        # Card 3: Polling Frequency Decimal Slider (Moved here to Home Menu, min 1.0s)
+        # Card 3: Polling Frequency Decimal Slider (1.0s to 10.0s)
         self.card_poll = ctk.CTkFrame(self.home_frame, fg_color=self.palette["card"], border_color=self.palette["border"], border_width=1, corner_radius=10)
         self.card_poll.grid(row=3, column=0, sticky="ew", padx=30, pady=6)
         self.card_poll.grid_columnconfigure(0, weight=1)
@@ -197,3 +201,199 @@ class BatteryOSCApp(ctk.CTk):
         self.settings_header.grid(row=0, column=0, sticky="w", padx=30, pady=(20, 10))
 
         # Theme Selector Card
+        self.card_pref_theme = ctk.CTkFrame(self.settings_frame, fg_color=self.palette["card"], border_color=self.palette["border"], border_width=1, corner_radius=10)
+        self.card_pref_theme.grid(row=1, column=0, sticky="ew", padx=30, pady=6)
+        self.card_pref_theme.grid_columnconfigure(0, weight=1)
+
+        self.theme_title = ctk.CTkLabel(self.card_pref_theme, text="🎨 Interface Aesthetic & Color Theme", font=("Segoe UI", 14, "bold"), text_color=self.palette["text"])
+        self.theme_title.grid(row=0, column=0, sticky="w", padx=25, pady=(15, 4))
+
+        self.theme_desc = ctk.CTkLabel(self.card_pref_theme, text="Select your preferred UI color scheme.", font=("Segoe UI", 12), text_color=self.palette["subtext"])
+        self.theme_desc.grid(row=1, column=0, sticky="w", padx=25, pady=(0, 10))
+
+        self.theme_dropdown = ctk.CTkComboBox(self.card_pref_theme, values=list(THEMES.keys()), width=280, command=self.on_theme_change, fg_color=self.palette["border"], border_color=self.palette["border"], text_color=self.palette["text"])
+        self.theme_dropdown.set(self.current_theme_name)
+        self.theme_dropdown.grid(row=1, column=1, sticky="e", padx=25, pady=(0, 15))
+
+        # App Info Card
+        self.card_pref_info = ctk.CTkFrame(self.settings_frame, fg_color=self.palette["card"], border_color=self.palette["border"], border_width=1, corner_radius=10)
+        self.card_pref_info.grid(row=2, column=0, sticky="ew", padx=30, pady=6)
+        self.card_pref_info.grid_columnconfigure(0, weight=1)
+
+        self.info_title = ctk.CTkLabel(self.card_pref_info, text="ℹ️ About VRChat Battery Bridge", font=("Segoe UI", 14, "bold"), text_color=self.palette["text"])
+        self.info_title.grid(row=0, column=0, sticky="w", padx=25, pady=(15, 4))
+
+        self.info_body = ctk.CTkLabel(self.card_pref_info, text="Version 1.4.1 (Startup Guard & Fixed Theme Edition)\nDesigned for custom Poiyomi avatar parameter shaders.", font=("Segoe UI", 12), text_color=self.palette["subtext"], justify="left")
+        self.info_body.grid(row=1, column=0, sticky="w", padx=25, pady=(0, 15))
+
+    def show_home_view(self):
+        self.settings_frame.grid_forget()
+        self.home_frame.grid(row=0, column=0, sticky="nsew")
+        self.home_btn.configure(fg_color=self.palette["card"])
+        self.settings_btn.configure(fg_color="transparent")
+
+    def show_settings_view(self):
+        self.home_frame.grid_forget()
+        self.settings_frame.grid(row=0, column=0, sticky="nsew")
+        self.settings_btn.configure(fg_color=self.palette["card"])
+        self.home_btn.configure(fg_color="transparent")
+        self.log_event("Navigated to QoL Settings Menu.")
+
+    def on_slider_change(self, value):
+        if not getattr(self, 'initialized', False):
+            return
+        self.poll_interval = max(1.0, round(float(value), 1))
+        if hasattr(self, 'poll_val_label'):
+            self.poll_val_label.configure(text=f"{self.poll_interval:.1f}s")
+        self.log_event(f"Option Changed -> Polling frequency set to {self.poll_interval}s")
+
+    def on_theme_change(self, theme_choice):
+        if not getattr(self, 'initialized', False):
+            return
+        self.current_theme_name = theme_choice
+        self.palette = THEMES[theme_choice]
+        self.log_event(f"Option Changed -> Interface Theme updated to '{theme_choice}'")
+        
+        # Apply theme colors across window containers instantly
+        self.sidebar_frame.configure(fg_color=self.palette["sidebar"])
+        self.right_container.configure(fg_color=self.palette["bg"])
+        self.card_log.configure(fg_color=self.palette["card"], border_color=self.palette["border"])
+        self.log_textbox.configure(fg_color=self.palette["log_bg"], border_color=self.palette["border"], text_color=self.palette["log_text"])
+        self.log_title.configure(text_color=self.palette["text"])
+        
+        # Rebuild views to update dynamic color bindings
+        current_view = "home" if self.home_frame.winfo_ismapped() else "settings"
+        self.setup_home_view()
+        self.setup_settings_view()
+        if current_view == "home":
+            self.show_home_view()
+        else:
+            self.show_settings_view()
+
+    def log_event(self, message):
+        timestamp = time.strftime("[%H:%M:%S]")
+        full_msg = f"{timestamp} {message}\n"
+        
+        def _insert():
+            if hasattr(self, 'log_textbox') and self.log_textbox.winfo_exists():
+                self.log_textbox.configure(state="normal")
+                self.log_textbox.insert("end", full_msg)
+                self.log_textbox.see("end")
+                self.log_textbox.configure(state="disabled")
+
+        if threading.current_thread() is threading.main_thread():
+            _insert()
+        else:
+            self.after(0, _insert)
+
+    def animate_ui(self):
+        current_spinner = self.spinner_frames[self.spinner_index]
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+
+        if hasattr(self, 'init_label') and self.init_label.winfo_exists():
+            if self.is_running:
+                self.init_label.configure(text=f"{current_spinner} Steam Frame Battery Module Active (Streaming)")
+            else:
+                self.init_label.configure(text=f"{current_spinner} Steam Frame Battery Module Ready (Standby)")
+
+        self.after(120, self.animate_ui)
+
+    def on_device_change(self, choice):
+        if not getattr(self, 'initialized', False):
+            return
+        self.log_event(f"Option Changed -> Target Device set to: {choice}")
+
+    def toggle_bridge_state(self):
+        if self.toggle_tracking.get() == 1:
+            try:
+                ip = self.ip_entry.get()
+                port = int(self.port_entry.get())
+                self.osc_client = udp_client.SimpleUDPClient(ip, port)
+                self.is_running = True
+                self.log_event(f"Tracking STARTED. Target OSC Endpoint -> {ip}:{port}")
+            except Exception as e:
+                self.log_event(f"ERROR: Failed to start tracking -> {e}")
+                self.battery_status_label.configure(text=f"Configuration Error: {e}")
+                self.toggle_tracking.deselect()
+                self.is_running = False
+        else:
+            self.is_running = False
+            self.log_event("Tracking STOPPED by user.")
+            self.battery_status_label.configure(text="Bridge Offline.")
+            self.battery_badge.configure(text="🔋 --%", text_color=self.palette["subtext"])
+
+    def get_openvr_battery(self):
+        try:
+            vrmeters = openvr.init(openvr.VRApplication_Background)
+            hmd_found = False
+            for i in range(openvr.k_unMaxTrackedDeviceCount):
+                device_class = vrmeters.getTrackedDeviceClass(i)
+                if device_class == openvr.TrackedDeviceClass_HMD:
+                    hmd_found = True
+                    battery_pct = vrmeters.getFloatTrackedDeviceProperty(
+                        i, openvr.Prop_DeviceBatteryPercentage_Float
+                    )
+                    openvr.shutdown()
+                    
+                    if battery_pct >= 0.0:
+                        return int(battery_pct * 100.0)
+            openvr.shutdown()
+            if not hmd_found:
+                return "No HMD Found in OpenVR"
+        except Exception as err:
+            return f"OpenVR Init Error: {err}"
+        return "Battery Property N/A"
+
+    def poll_battery_loop(self):
+        while True:
+            if self.is_running and self.osc_client:
+                try:
+                    selected_target = self.device_dropdown.get()
+                    battery_val = None
+                    plugged_status = "Unknown"
+                    
+                    if "OpenVR" in selected_target:
+                        result = self.get_openvr_battery()
+                        if isinstance(result, int):
+                            battery_val = result
+                            plugged_status = "Headset Active"
+                        else:
+                            self.log_event(f"OpenVR warning: {result}")
+                            if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                                self.battery_status_label.configure(text=f"OpenVR Status: {result}")
+                                self.battery_badge.configure(text="🔋 N/A", text_color="#f59e0b")
+                            time.sleep(max(self.poll_interval, 1.0))
+                            continue
+                    else:
+                        # Local Host System Battery check with desktop fallback
+                        batt = psutil.sensors_battery()
+                        if batt is not None:
+                            battery_val = batt.percent
+                            plugged_status = "Plugged In" if batt.power_plugged else "Discharging"
+                        else:
+                            battery_val = 100
+                            plugged_status = "AC Powered / Wall Connected (Desktop)"
+
+                    if battery_val is not None:
+                        val_float = round(float(battery_val) / 100.0, 2)
+                        
+                        # Send data transfer via OSC
+                        self.osc_client.send_message("/avatar/parameters/BatteryLevel", val_float)
+                        
+                        # Log data transfer & UI update
+                        self.log_event(f"Data Transfer -> Sent OSC '/avatar/parameters/BatteryLevel' = {val_float} ({battery_val}% - {plugged_status})")
+                        
+                        if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                            self.battery_status_label.configure(
+                                text=f"Connected Source: {selected_target}\nStatus: {plugged_status} | Battery: {battery_val}%\nOSC Float Sent: {val_float}"
+                            )
+                            self.battery_badge.configure(text=f"🔋 {battery_val}%", text_color=self.palette["accent"])
+                except Exception as ex:
+                    self.log_event(f"CRITICAL EXCEPTION in poll loop: {ex}")
+                    if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                        self.battery_status_label.configure(text=f"Bridge Exception: {ex}")
+            time.sleep(max(self.poll_interval, 1.0))
+
+if __name__ == "__main__":
+    app = BatteryOSCApp()
+    app.mainloop()
