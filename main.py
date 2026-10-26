@@ -118,7 +118,6 @@ class BatteryOSCApp(ctk.CTk):
         self.log_event("Application initialized successfully. Ready.")
 
     def log_event(self, message):
-        """Appends a timestamped log entry to the debug console textbox safely from any thread."""
         timestamp = time.strftime("[%H:%M:%S]")
         full_msg = f"{timestamp} {message}\n"
         
@@ -171,7 +170,8 @@ class BatteryOSCApp(ctk.CTk):
             vrmeters = openvr.init(openvr.VRApplication_Background)
             hmd_found = False
             for i in range(openvr.k_unMaxTrackedDeviceCount):
-                device_class = vrmeters.getTrackedDeviceClassForIndex(i)
+                # FIXED: Changed from getTrackedDeviceClassForIndex to getTrackedDeviceClass
+                device_class = vrmeters.getTrackedDeviceClass(i)
                 if device_class == openvr.TrackedDeviceClass_HMD:
                     hmd_found = True
                     battery_pct = vrmeters.getFloatTrackedDeviceProperty(
