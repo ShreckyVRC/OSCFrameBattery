@@ -17,6 +17,10 @@ class BatteryOSCApp(ctk.CTk):
 
         self.is_running = False
         self.osc_client = None
+        
+        # Animation spinner frames (Braille spinner)
+        self.spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self.spinner_index = 0
 
         # Main window layout: Sidebar column (0) and Content column (1)
         self.grid_columnconfigure(1, weight=1)
@@ -44,7 +48,7 @@ class BatteryOSCApp(ctk.CTk):
         self.card_init.grid(row=1, column=0, sticky="ew", padx=30, pady=8)
         self.card_init.grid_columnconfigure(0, weight=1)
 
-        self.init_label = ctk.CTkLabel(self.card_init, text="Steam Frame Battery Module Ready", font=("Segoe UI", 16), text_color="#ffffff")
+        self.init_label = ctk.CTkLabel(self.card_init, text="⠋ Steam Frame Battery Module Ready", font=("Segoe UI", 16), text_color="#ffffff")
         self.init_label.grid(row=0, column=0, sticky="w", padx=25, pady=22)
 
         self.toggle_tracking = ctk.CTkSwitch(self.card_init, text="Toggle Tracking", font=("Segoe UI", 12), command=self.toggle_bridge_state)
@@ -78,20 +82,39 @@ class BatteryOSCApp(ctk.CTk):
         self.port_entry.insert(0, "9000")
         self.port_entry.grid(row=2, column=1, sticky="e", padx=25, pady=(5, 18))
 
-        # --- Card 3: Live Status & Metrics ---
+        # --- Card 3: Live Status & Metrics (With Battery Badge on Right) ---
         self.card_avatar = ctk.CTkFrame(self.main_frame, fg_color="#1e1e1e", corner_radius=10)
         self.card_avatar.grid(row=3, column=0, sticky="ew", padx=30, pady=8)
         self.card_avatar.grid_columnconfigure(0, weight=1)
 
         self.avatar_title = ctk.CTkLabel(self.card_avatar, text="🔋  Live Stream Status", font=("Segoe UI", 14, "bold"), text_color="#ffffff")
-        self.avatar_title.grid(row=0, column=0, sticky="w", padx=25, pady=(18, 4))
+        self.avatar_title.grid(row=0, column=0, columnspan=2, sticky="w", padx=25, pady=(18, 4))
 
         self.battery_status_label = ctk.CTkLabel(self.card_avatar, text="Bridge Offline. Toggle tracking above to begin.", font=("Segoe UI", 12), text_color="#a0a0a0", justify="left")
         self.battery_status_label.grid(row=1, column=0, sticky="w", padx=25, pady=(0, 18))
 
-        # Background Loop Threading
+        # Right-side Battery Badge (Always visible, even when offline)
+        self.battery_badge = ctk.CTkLabel(self.card_avatar, text="🔋 --%", font=("Segoe UI", 16, "bold"), text_color="#a0a0a0")
+        self.battery_badge.grid(row=1, column=1, sticky="e", padx=25, pady=(0, 18))
+
+        # Start background polling thread & UI animation loop
         self.poll_thread = threading.Thread(target=self.poll_battery_loop, daemon=True)
         self.poll_thread.start()
+        
+        self.animate_ui()
+
+    def animate_ui(self):
+        """Smoothly ticks the spinner so the user knows the app is fully responsive."""
+        current_spinner = self.spinner_frames[self.spinner_index]
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+
+        if self.is_running:
+            self.init_label.configure(text=f"{current_spinner} Steam Frame Battery Module Active (Streaming)")
+        else:
+            self.init_label.configure(text=f"{current_spinner} Steam Frame Battery Module Ready (Standby)")
+
+        # Schedule next frame update in 120ms
+        self.after(120, self.animate_ui)
 
     def toggle_bridge_state(self):
         if self.toggle_tracking.get() == 1:
@@ -100,15 +123,14 @@ class BatteryOSCApp(ctk.CTk):
                 port = int(self.port_entry.get())
                 self.osc_client = udp_client.SimpleUDPClient(ip, port)
                 self.is_running = True
-                self.init_label.configure(text="Steam Frame Battery Module Active")
             except Exception as e:
                 self.battery_status_label.configure(text=f"Configuration Error: {e}")
                 self.toggle_tracking.deselect()
                 self.is_running = False
         else:
             self.is_running = False
-            self.init_label.configure(text="Bridge Paused")
             self.battery_status_label.configure(text="Bridge Offline.")
+            self.battery_badge.configure(text="🔋 --%", text_color="#a0a0a0")
 
     def poll_battery_loop(self):
         while True:
@@ -122,14 +144,17 @@ class BatteryOSCApp(ctk.CTk):
                         # Send to target OSC endpoint
                         self.osc_client.send_message("/avatar/parameters/BatteryLevel", val)
                         
+                        # Update text & right-side badge
                         self.battery_status_label.configure(
-                            text=f"Connected Device: {self.device_dropdown.get()}\nBattery: {battery.percent}% ({plugged}) | OSC Float Sent: {val}"
+                            text=f"Connected Device: {self.device_dropdown.get()}\nPower State: {plugged} | OSC Float Sent: {val}"
                         )
+                        self.battery_badge.configure(text=f"🔋 {battery.percent}%", text_color="#3fabf7")
                     else:
                         self.battery_status_label.configure(text="Searching for Steam Frame hardware link...")
+                        self.battery_badge.configure(text="🔋 N/A", text_color="#f29e4c")
                 except Exception as ex:
                     self.battery_status_label.configure(text=f"Transmission Error: {ex}")
-            time.sleep(5)
+            time.sleep(3)
 
 if __name__ == "__main__":
     app = BatteryOSCApp()
