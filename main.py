@@ -284,4 +284,117 @@ class BatteryOSCApp(ctk.CTk):
                 self.log_textbox.see("end")
                 self.log_textbox.configure(state="disabled")
 
-        if
+        if threading.current_thread() is threading.main_thread():
+            _insert()
+        else:
+            self.after(0, _insert)
+
+    def animate_ui(self):
+        current_spinner = self.spinner_frames[self.spinner_index]
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+
+        if hasattr(self, 'init_label') and self.init_label.winfo_exists():
+            if self.is_running:
+                # Active/Streaming state: No spinning loading icon
+                self.init_label.configure(text="Steam Frame Battery Module Active (Streaming)")
+            else:
+                # Inactive/Standby state: Searching spinner on the right side of the text
+                self.init_label.configure(text=f"Steam Frame Battery Module Searching... {current_spinner}")
+
+        self.after(120, self.animate_ui)
+
+    def on_device_change(self, choice):
+        if not getattr(self, 'initialized', False):
+            return
+        self.log_event(f"Option Changed -> Target Device set to: {choice}")
+
+    def toggle_bridge_state(self):
+        if self.toggle_tracking.get() == 1:
+            try:
+                ip = self.ip_entry.get()
+                port = int(self.port_entry.get())
+                self.osc_client = udp_client.SimpleUDPClient(ip, port)
+                self.is_running = True
+                self.log_event(f"Tracking STARTED. Target OSC Endpoint -> {ip}:{port}")
+            except Exception as e:
+                self.log_event(f"ERROR: Failed to start tracking -> {e}")
+                self.battery_status_label.configure(text=f"Configuration Error: {e}")
+                self.toggle_tracking.deselect()
+                self.is_running = False
+        else:
+            self.is_running = False
+            self.log_event("Tracking STOPPED by user.")
+            self.battery_status_label.configure(text="Bridge Offline.")
+            self.battery_badge.configure(text="🔋 --%", text_color=self.palette["subtext"])
+
+    def get_openvr_battery(self):
+        try:
+            vrmeters = openvr.init(openvr.VRApplication_Background)
+            hmd_found = False
+            for i in range(openvr.k_unMaxTrackedDeviceCount):
+                device_class = vrmeters.getTrackedDeviceClass(i)
+                if device_class == openvr.TrackedDeviceClass_HMD:
+                    hmd_found = True
+                    battery_pct = vrmeters.getFloatTrackedDeviceProperty(
+                        i, openvr.Prop_DeviceBatteryPercentage_Float
+                    )
+                    openvr.shutdown()
+                    
+                    if battery_pct >= 0.0:
+                        return int(battery_pct * 100.0)
+            openvr.shutdown()
+            if not hmd_found:
+                return "No HMD Found in OpenVR"
+        except Exception as err:
+            return f"OpenVR Init Error: {err}"
+        return "Battery Property N/A"
+
+    def poll_battery_loop(self):
+        while True:
+            if self.is_running and self.osc_client:
+                try:
+                    selected_target = self.device_dropdown.get()
+                    battery_val = None
+                    plugged_status = "Unknown"
+                    
+                    if "OpenVR" in selected_target:
+                        result = self.get_openvr_battery()
+                        if isinstance(result, int):
+                            battery_val = result
+                            plugged_status = "Headset Active"
+                        else:
+                            self.log_event(f"OpenVR warning: {result}")
+                            if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                                self.battery_status_label.configure(text=f"OpenVR Status: {result}")
+                                self.battery_badge.configure(text="🔋 N/A", text_color="#f59e0b")
+                            time.sleep(max(self.poll_interval, 1.0))
+                            continue
+                    else:
+                        batt = psutil.sensors_battery()
+                        if batt is not None:
+                            battery_val = batt.percent
+                            plugged_status = "Plugged In" if batt.power_plugged else "Discharging"
+                        else:
+                            battery_val = 100
+                            plugged_status = "AC Powered / Wall Connected (Desktop)"
+
+                    if battery_val is not None:
+                        val_float = round(float(battery_val) / 100.0, 2)
+                        
+                        self.osc_client.send_message("/avatar/parameters/BatteryLevel", val_float)
+                        self.log_event(f"Data Transfer -> Sent OSC '/avatar/parameters/BatteryLevel' = {val_float} ({battery_val}% - {plugged_status})")
+                        
+                        if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                            self.battery_status_label.configure(
+                                text=f"Connected Source: {selected_target}\nStatus: {plugged_status} | Battery: {battery_val}%\nOSC Float Sent: {val_float}"
+                            )
+                            self.battery_badge.configure(text=f"🔋 {battery_val}%", text_color=self.palette["accent"])
+                except Exception as ex:
+                    self.log_event(f"CRITICAL EXCEPTION in poll loop: {ex}")
+                    if hasattr(self, 'battery_status_label') and self.battery_status_label.winfo_exists():
+                        self.battery_status_label.configure(text=f"Bridge Exception: {ex}")
+            time.sleep(max(self.poll_interval, 1.0))
+
+if __name__ == "__main__":
+    app = BatteryOSCApp()
+    app.mainloop()
