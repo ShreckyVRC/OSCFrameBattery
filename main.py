@@ -3,6 +3,7 @@ import psutil
 from pythonosc import udp_client
 import threading
 import time
+import openvr
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
@@ -66,8 +67,8 @@ class BatteryOSCApp(ctk.CTk):
         self.device_label = ctk.CTkLabel(self.card_settings, text="Target Device:", font=("Segoe UI", 12), text_color="#a0a0a0")
         self.device_label.grid(row=1, column=0, sticky="w", padx=25, pady=5)
         
-        self.device_dropdown = ctk.CTkComboBox(self.card_settings, values=["Steam Frame (Default / OpenXR)", "Local Host System Battery"], width=280)
-        self.device_dropdown.set("Steam Frame (Default / OpenXR)")
+        self.device_dropdown = ctk.CTkComboBox(self.card_settings, values=["Steam Frame (OpenVR / Headset)", "Local Host System Battery"], width=280)
+        self.device_dropdown.set("Steam Frame (OpenVR / Headset)")
         self.device_dropdown.grid(row=1, column=1, sticky="e", padx=25, pady=5)
 
         # IP & Port Inputs
@@ -82,7 +83,7 @@ class BatteryOSCApp(ctk.CTk):
         self.port_entry.insert(0, "9000")
         self.port_entry.grid(row=2, column=1, sticky="e", padx=25, pady=(5, 18))
 
-        # --- Card 3: Live Status & Metrics (With Battery Badge on Right) ---
+        # --- Card 3: Live Status & Metrics ---
         self.card_avatar = ctk.CTkFrame(self.main_frame, fg_color="#1e1e1e", corner_radius=10)
         self.card_avatar.grid(row=3, column=0, sticky="ew", padx=30, pady=8)
         self.card_avatar.grid_columnconfigure(0, weight=1)
@@ -93,7 +94,7 @@ class BatteryOSCApp(ctk.CTk):
         self.battery_status_label = ctk.CTkLabel(self.card_avatar, text="Bridge Offline. Toggle tracking above to begin.", font=("Segoe UI", 12), text_color="#a0a0a0", justify="left")
         self.battery_status_label.grid(row=1, column=0, sticky="w", padx=25, pady=(0, 18))
 
-        # Right-side Battery Badge (Always visible, even when offline)
+        # Right-side Battery Badge
         self.battery_badge = ctk.CTkLabel(self.card_avatar, text="🔋 --%", font=("Segoe UI", 16, "bold"), text_color="#a0a0a0")
         self.battery_badge.grid(row=1, column=1, sticky="e", padx=25, pady=(0, 18))
 
@@ -104,7 +105,6 @@ class BatteryOSCApp(ctk.CTk):
         self.animate_ui()
 
     def animate_ui(self):
-        """Smoothly ticks the spinner so the user knows the app is fully responsive."""
         current_spinner = self.spinner_frames[self.spinner_index]
         self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
 
@@ -113,7 +113,6 @@ class BatteryOSCApp(ctk.CTk):
         else:
             self.init_label.configure(text=f"{current_spinner} Steam Frame Battery Module Ready (Standby)")
 
-        # Schedule next frame update in 120ms
         self.after(120, self.animate_ui)
 
     def toggle_bridge_state(self):
@@ -132,28 +131,57 @@ class BatteryOSCApp(ctk.CTk):
             self.battery_status_label.configure(text="Bridge Offline.")
             self.battery_badge.configure(text="🔋 --%", text_color="#a0a0a0")
 
+    def get_openvr_battery(self):
+        """Queries OpenVR runtime for connected headset battery level."""
+        try:
+            # Initialize OpenVR in 'Background' (Server) mode so it doesn't conflict with SteamVR games
+            vrmeters = openvr.init(openvr.VRApplication_Background)
+            
+            # Look through tracked device indices (0 is typically HMD)
+            for i in range(openvr.k_unMaxTrackedDeviceCount):
+                device_class = vrmeters.getTrackedDeviceClassForIndex(i)
+                if device_class == openvr.TrackedDeviceClass_HMD:
+                    # Check if property float exists for battery percentage
+                    error = openvr.EVRTrackedPropertyError()
+                    battery_pct = vrmeters.getFloatTrackedDeviceProperty(
+                        i, openvr.Prop_DeviceBatteryPercentage_Float
+                    )
+                    openvr.shutdown()
+                    
+                    if battery_pct >= 0.0:
+                        return int(battery_pct * 100.0)
+            openvr.shutdown()
+        except Exception:
+            pass
+        return None
+
     def poll_battery_loop(self):
         while True:
             if self.is_running and self.osc_client:
                 try:
-                    battery = psutil.sensors_battery()
-                    if battery:
-                        val = round(battery.percent / 100.0, 2)
-                        plugged = "Plugged In" if battery.power_plugged else "Discharging"
-                        
-                        # Send to target OSC endpoint
-                        self.osc_client.send_message("/avatar/parameters/BatteryLevel", val)
-                        
-                        # Update text & right-side badge
-                        self.battery_status_label.configure(
-                            text=f"Connected Device: {self.device_dropdown.get()}\nPower State: {plugged} | OSC Float Sent: {val}"
-                        )
-                        self.battery_badge.configure(text=f"🔋 {battery.percent}%", text_color="#3fabf7")
+                    selected_target = self.device_dropdown.get()
+                    battery_val = None
+                    
+                    if "OpenVR" in selected_target:
+                        battery_val = self.get_openvr_battery()
                     else:
-                        self.battery_status_label.configure(text="Searching for Steam Frame hardware link...")
+                        batt = psutil.sensors_battery()
+                        if batt:
+                            battery_val = batt.percent
+
+                    if battery_val is not None:
+                        val_float = round(float(battery_val) / 100.0, 2)
+                        self.osc_client.send_message("/avatar/parameters/BatteryLevel", val_float)
+                        
+                        self.battery_status_label.configure(
+                            text=f"Connected Source: {selected_target}\nBattery Level: {battery_val}% | OSC Float Sent: {val_float}"
+                        )
+                        self.battery_badge.configure(text=f"🔋 {battery_val}%", text_color="#3fabf7")
+                    else:
+                        self.battery_status_label.configure(text="Waiting for OpenVR / SteamVR connection...")
                         self.battery_badge.configure(text="🔋 N/A", text_color="#f29e4c")
                 except Exception as ex:
-                    self.battery_status_label.configure(text=f"Transmission Error: {ex}")
+                    self.battery_status_label.configure(text=f"Bridge Exception: {ex}")
             time.sleep(3)
 
 if __name__ == "__main__":
